@@ -14,12 +14,17 @@ export class avrcpu {
   registers: Uint8Array
   peripherals: Uint8Array
   
-  pc: number = 0      // Program Counter
-  status: number = 0  // ITHSVNZC
+  pc: number = 0    // Program Counter
+  sreg: number = 0  // ITHSVNZC
   
-  get z() { return this.registers[31] << 8 | this.registers[30] }
-  get y() { return this.registers[29] << 8 | this.registers[28] }
   get x() { return this.registers[27] << 8 | this.registers[26] }
+  get y() { return this.registers[29] << 8 | this.registers[28] }
+  get z() { return this.registers[31] << 8 | this.registers[30] }
+
+  incZ() {
+    if (this.registers[30] === 0xFF) this.registers[31] += 1
+    this.registers[30] += 1
+  }
 
   peripheralsName = new Map([[0x24, "DDRB"], [0x25, "PORTB"], [0x6E, "TIMSK0"]])
 
@@ -76,14 +81,14 @@ export class avrcpu {
   step() {
     const insn = this.flashView.getUint16(this.pc, true)
     const regs = Array(...this.registers).map(r => stoh8(r)).join(' ')
-    const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.status >> (8 - bit)) & 1) ? f : '.').join('')
+    const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.sreg >> (8 - bit)) & 1) ? f : '.').join('')
     console.log(`${stoh16(this.pc)}: ${stoh16(insn)} ${stob16(insn)} ${sreg} ${regs}`)
 
     let _pc = this.pc + 2
 
     // SEI: Set Global Interrupt Flag
     if (bmatch(insn, 0b1001010001111000, 0b1111111111111111)) {        
-      this.status |= 1 << 8 
+      this.sreg |= 1 << 8 
     
     // IN: Load an I/O Location to Register
     } else if (bmatch(insn, 0b1011000000000000, 0b1111100000000000)) {    
@@ -102,6 +107,19 @@ export class avrcpu {
       const Rd = ((insn >> 4) & 0b1111) + 16
       const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
       this.registers[Rd] = this.registers[Rd] | K
+    
+    // LPM: Load Program Memory
+    } else if (bmatch(insn, 0b1001000000000100, 0b1111111000001111)) {
+      const Rd = (insn >> 4) & 0b11111
+      const value = this.flash[this.z]
+      this.registers[Rd] = value
+
+    // LPM: Load Program Memory (Z+)
+    } else if (bmatch(insn, 0b1001000000000101, 0b1111111000001111)) {
+      const Rd = (insn >> 4) & 0b11111
+      const value = this.flash[this.z]
+      this.registers[Rd] = value
+      this.incZ()
 
     // LDI: Load Immediate
     } else if (bmatch(insn, 0b1110000000000000, 0b1111000000000000)) {
