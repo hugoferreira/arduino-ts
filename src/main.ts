@@ -7,6 +7,9 @@ const stob16 = (u16: number) => u16.toString(2).padStart(16, '0')
 const stoh8 = (u8: number) => u8.toString(16).padStart(2, '0')
 const stob8 = (u8: number) => u8.toString(2).padStart(8, '0')
 const bmatch = (a: number, match: number, mask: number) => (a & mask) == match
+const signed7bit = (x: number) => x & 0b1000000 ? (x & ~(1 << 6)) - 64 : x
+
+
 
 export class avrcpu {
   flashView: DataView
@@ -113,6 +116,12 @@ export class avrcpu {
       const Rd = (insn >> 4) & 0b11111
       const value = this.flash[this.z]
       this.registers[Rd] = value
+
+    //BREQ: Branch if Equal
+    } else if (bmatch(insn, 0b1111000000000001, 0b1111110000000001)){
+      const value = signed7bit((insn >> 3) & 0b1111111) * 2
+      // checks Z flag
+      if (this.sreg & 0b10) _pc += value + 2
 
     // LPM: Load Program Memory (Z+)
     } else if (bmatch(insn, 0b1001000000000101, 0b1111111000001111)) {
