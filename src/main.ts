@@ -6,6 +6,7 @@ const stoh16 = (u16: number) => u16.toString(16).padStart(4, '0')
 const stob16 = (u16: number) => u16.toString(2).padStart(16, '0')
 const stoh8 = (u8: number) => u8.toString(16).padStart(2, '0')
 const stob8 = (u8: number) => u8.toString(2).padStart(8, '0')
+const bmatch = (a: number, match: number, mask: number) => (a & mask) == match
 
 export class avrcpu {
   flashView: DataView
@@ -80,31 +81,44 @@ export class avrcpu {
 
     let _pc = this.pc + 2
 
-    if (insn == 0b1001010001111000) {        // SEI: Set Global Interrupt Flag
+    // SEI: Set Global Interrupt Flag
+    if (bmatch(insn, 0b1001010001111000, 0b1111111111111111)) {        
       this.status |= 1 << 8 
-    } else if ((insn >> 11) == 0b10110) {    // IN: Load an I/O Location to Register
+    
+    // IN: Load an I/O Location to Register
+    } else if (bmatch(insn, 0b1011000000000000, 0b1111100000000000)) {    
       const Rd = (insn >> 4) & 0b11111
       const A = ((insn >> 5) & 0b110000) | (insn & 0b1111)
-      this.registers[Rd] = this.peekIO(A)      
-    } else if ((insn >> 11) == 0b10111) {    // OUT: Store Register to I/O Location
+      this.registers[Rd] = this.peekIO(A) 
+           
+    // OUT: Store Register to I/O Location
+    } else if (bmatch(insn, 0b1011100000000000, 0b1111100000000000)) {    
       const Rd = (insn >> 4) & 0b11111
       const A = ((insn >> 5) & 0b110000) | (insn & 0b1111)
       this.pokeIO(A, this.registers[Rd])
-    } else if ((insn >> 12) == 0b0110) {     // ORI: Logical OR with Immediate
+
+    // ORI: Logical OR with Immediate
+    } else if (bmatch(insn, 0b0110000000000000, 0b1111000000000000)) {
       const Rd = ((insn >> 4) & 0b1111) + 16
       const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
       this.registers[Rd] = this.registers[Rd] | K
-    } else if ((insn >> 12) == 0b1110) {     // LDI
+
+    // LDI: Load Immediate
+    } else if (bmatch(insn, 0b1110000000000000, 0b1111000000000000)) {
       const Rd = ((insn >> 4) & 0b1111) + 16
       const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
       this.registers[Rd] = K
-    } else if (((insn >> 9) == 0b1001000) && ((insn & 0b1111) == 0b0000)) {  // LDS: Load Direct from Data Space
+    
+    // LDS: Load Direct from Data Space
+    } else if (bmatch(insn, 0b1001000000000000, 0b1111111000001111)) {
       const Rd = (insn >> 4) & 0b11111
       const k = this.flashView.getUint16(_pc, true)
       const value = this.peek(k)
       this.registers[Rd] = value
       _pc += 2
-    } else if (((insn >> 9) == 0b1001001) && ((insn & 0b1111) == 0b0000)) {  // STS: Store Direct to Data Space
+    
+    // STS: Store Direct to Data Space
+    } else if (bmatch(insn, 0b1001001000000000, 0b1111111000001111)) {
       const Rd = (insn >> 4) & 0b11111
       const k = this.flashView.getUint16(_pc, true)
       this.poke(k, this.registers[Rd])
