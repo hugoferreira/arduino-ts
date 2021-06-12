@@ -42,7 +42,7 @@ export class avrcpu {
   get S() { return this.sreg & flags.S }
   get V() { return this.sreg & flags.V }
   get N() { return this.sreg & flags.N }
-  get Z() { return this.sreg & flags.Z }
+  get Z() { return this.sreg & flags.Z }  // Do not confuse with z register
   get C() { return this.sreg & flags.C }
 
   setFlag(f: flags, v: boolean | number, clear: boolean = true) { 
@@ -130,8 +130,8 @@ export class avrcpu {
     let _pc = this.pc + 2
 
     // SEI: Set Global Interrupt Flag
-    if (bmatch(insn, 0b1001010001111000, 0b1111111111111111)) {        
-      this.sreg |= flags.I 
+    if (bmatch(insn, 0b1001010001111000, 0b1111111111111111)) { 
+      this.setFlag(flags.I, 1)
     
     // IN: Load an I/O Location to Register
     } else if (bmatch(insn, 0b1011000000000000, 0b1111100000000000)) {    
@@ -169,7 +169,7 @@ export class avrcpu {
 
     // BREQ: Branch if Equal
     } else if (bmatch(insn, 0b1111000000000001, 0b1111110000000001)) {
-      if (this.sreg & flags.Z)  // sets PC if Z flag is set
+      if (this.Z)  // sets PC if Z flag is set
         _pc += signed7bit((insn >> 3) & 0b1111111) * 2 + 2
  
     // LPM: Load Program Memory (Z+)
