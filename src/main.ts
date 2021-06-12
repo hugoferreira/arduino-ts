@@ -27,13 +27,30 @@ export class avrcpu {
   peripherals: Uint8Array
   
   pc: number = 0    // Program Counter
-  sreg: number = 0  // ITHSVNZC
   
+  // X, Y, Z Address Registers
   get x() { return this.registers[27] << 8 | this.registers[26] }
   get y() { return this.registers[29] << 8 | this.registers[28] }
   get z() { return this.registers[31] << 8 | this.registers[30] }
 
-  incZ() {
+  // Status and Flags
+  sreg: number = 0  // ITHSVNZC
+
+  get I() { return this.sreg & flags.I }
+  get T() { return this.sreg & flags.T }
+  get H() { return this.sreg & flags.H }
+  get S() { return this.sreg & flags.S }
+  get V() { return this.sreg & flags.V }
+  get N() { return this.sreg & flags.N }
+  get Z() { return this.sreg & flags.Z }
+  get C() { return this.sreg & flags.C }
+
+  setFlag(f: flags, v: boolean | number, clear: boolean = true) { 
+    if (v) this.sreg |= f
+    else if (clear) this.sreg &= ~f 
+  }
+  
+  incz() {
     if (this.registers[30] === 0xFF) this.registers[31] += 1
     this.registers[30] += 1
   }
@@ -91,15 +108,17 @@ export class avrcpu {
   }
 
   updateFlags(result: number) {
-    this.sreg &= ~flags.V // Clear V
+    // Clear V
+    this.setFlag(flags.V, 0) 
 
-    // Set/Clear N and S according to MSB (since V is always 0)
-    if (result & (1 << 7)) this.sreg |= flags.N | flags.S
-    else this.sreg &= ~(flags.N | flags.S)
+    // Set/Clear N according to MSB
+    this.setFlag(flags.N, result & (1 << 7))
 
     // Set/Clear Z if value is equal to Zero
-    if (result === 0) this.sreg |= flags.Z
-    else this.sreg &= ~flags.Z
+    this.setFlag(flags.Z, result === 0)
+
+    // S is N xor V
+    this.setFlag(flags.S, this.N ^ this.V)
   }
 
   step() {
@@ -158,7 +177,7 @@ export class avrcpu {
       const Rd = (insn >> 4) & 0b11111
       const value = this.flash[this.z]
       this.registers[Rd] = value
-      this.incZ()
+      this.incz()
 
     // LDI: Load Immediate
     } else if (bmatch(insn, 0b1110000000000000, 0b1111000000000000)) {
