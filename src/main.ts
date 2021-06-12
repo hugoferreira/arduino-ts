@@ -92,10 +92,14 @@ export class avrcpu {
 
   updateFlags(result: number) {
     this.sreg &= ~flags.V // Clear V
+
     // Set/Clear N and S according to MSB (since V is always 0)
     if (result & (1 << 7)) this.sreg |= flags.N | flags.S
     else this.sreg &= ~(flags.N | flags.S)
+
+    // Set/Clear Z if value is equal to Zero
     if (result === 0) this.sreg |= flags.Z
+    else this.sreg &= ~flags.Z
   }
 
   step() {
