@@ -92,6 +92,14 @@ export class avrcpu {
     if (!result) console.log(`Unrecognized Peripheral ${addr}`)
   }
 
+  updateFlags(result: number) {
+    this.sreg &= ~flags.V // Clear V
+    // Set/Clear N and S according to MSB (since V is always 0)
+    if (result & (1 << 7)) this.sreg |= flags.N | flags.S
+    else this.sreg &= ~(flags.N | flags.S)
+    if (result === 0) this.sreg |= flags.Z
+  }
+
   step() {
     const insn = this.flashView.getUint16(this.pc, true)
     const regs = Array(...this.registers).map(r => stoh8(r)).join(' ')
@@ -120,20 +128,17 @@ export class avrcpu {
     } else if (bmatch(insn, 0b0110000000000000, 0b1111000000000000)) {
       const Rd = ((insn >> 4) & 0b1111) + 16
       const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
-      this.registers[Rd] |= K
-    
+      const result = this.registers[Rd] | K
+      this.registers[Rd] = result
+      this.updateFlags(result)
+
     // AND: Logical AND
     } else if (bmatch(insn, 0b0010000000000000, 0b1111110000000000)) {
       const Rd = (insn >> 4) & 0b11111
       const Rr = (insn >> 5) & 0b10000 | (insn & 0b1111)
       const result = this.registers[Rd] & this.registers[Rr]
       this.registers[Rd] = result
-      
-      this.sreg &= ~flags.V // Clear V
-      // Set/Clear N and S according to MSB (since V is always 0)
-      if (result & (1 << 7)) this.sreg |= flags.N | flags.S
-      else this.sreg &= ~(flags.N | flags.S)
-      if (result === 0) this.sreg |= flags.Z
+      this.updateFlags(result)
     
     // LPM: Load Program Memory
     } else if (bmatch(insn, 0b1001000000000100, 0b1111111000001111)) {
