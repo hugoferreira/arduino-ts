@@ -141,12 +141,11 @@ export class avrcpu {
       const value = this.flash[this.z]
       this.registers[Rd] = value
 
-    //BREQ: Branch if Equal
-    } else if (bmatch(insn, 0b1111000000000001, 0b1111110000000001)){
-      const value = signed7bit((insn >> 3) & 0b1111111) * 2
-      // checks Z flag
-      if (this.sreg & 0b10) _pc += value + 2
-
+    // BREQ: Branch if Equal
+    } else if (bmatch(insn, 0b1111000000000001, 0b1111110000000001)) {
+      if (this.sreg & flags.Z)  // sets PC if Z flag is set
+        _pc += signed7bit((insn >> 3) & 0b1111111) * 2 + 2
+ 
     // LPM: Load Program Memory (Z+)
     } else if (bmatch(insn, 0b1001000000000101, 0b1111111000001111)) {
       const Rd = (insn >> 4) & 0b11111
