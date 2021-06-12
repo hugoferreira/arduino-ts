@@ -23,5 +23,19 @@ function readIntelHex(path: string, mem: Uint8Array) {
 
 readIntelHex('./hexdumps/Blink.ino.hex', mem)
 
-cpu.pc = 0x2ba
-for (let i = 0; i < 60; i+=1) cpu.step() 
+//cpu.pc = 0x2ba
+//for (let i = 0; i < 60; i+=1) cpu.step() 
+
+const s7ton = (a: number) => (a & 0b1000000) ? -(~a & 0b0111111) - 1 : a
+
+s7ton(0b0000000) //?
+s7ton(0b0000001) //?
+s7ton(0b0111111) //?
+s7ton(0b1000000) //?
+s7ton(0b1000001) //?
+s7ton(0b1111111) //?
+
+
+
+
+

@@ -8,6 +8,17 @@ const stoh8 = (u8: number) => u8.toString(16).padStart(2, '0')
 const stob8 = (u8: number) => u8.toString(2).padStart(8, '0')
 const bmatch = (a: number, match: number, mask: number) => (a & mask) == match
 
+enum flags {
+  C = 0b00000001,
+  Z = 0b00000010,
+  N = 0b00000100,
+  V = 0b00001000,
+  S = 0b00010000,
+  H = 0b00100000,
+  T = 0b01000000,
+  I = 0b10000000
+}
+
 export class avrcpu {
   flashView: DataView
   sramView: Uint8Array
@@ -88,7 +99,7 @@ export class avrcpu {
 
     // SEI: Set Global Interrupt Flag
     if (bmatch(insn, 0b1001010001111000, 0b1111111111111111)) {        
-      this.sreg |= 1 << 8 
+      this.sreg |= flags.I 
     
     // IN: Load an I/O Location to Register
     } else if (bmatch(insn, 0b1011000000000000, 0b1111100000000000)) {    
@@ -106,7 +117,20 @@ export class avrcpu {
     } else if (bmatch(insn, 0b0110000000000000, 0b1111000000000000)) {
       const Rd = ((insn >> 4) & 0b1111) + 16
       const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
-      this.registers[Rd] = this.registers[Rd] | K
+      this.registers[Rd] |= K
+    
+    // AND: Logical AND
+    } else if (bmatch(insn, 0b0010000000000000, 0b1111110000000000)) {
+      const Rd = (insn >> 4) & 0b11111
+      const Rr = (insn >> 5) & 0b10000 | (insn & 0b1111)
+      const result = this.registers[Rd] & this.registers[Rr]
+      this.registers[Rd] = result
+      
+      this.sreg &= ~flags.V // Clear V
+      // Set/Clear N and S according to MSB (since V is always 0)
+      if (result & (1 << 7)) this.sreg |= flags.N | flags.S
+      else this.sreg &= ~(flags.N | flags.S)
+      if (result === 0) this.sreg |= flags.Z
     
     // LPM: Load Program Memory
     } else if (bmatch(insn, 0b1001000000000100, 0b1111111000001111)) {
