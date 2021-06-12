@@ -9,8 +9,6 @@ const stob8 = (u8: number) => u8.toString(2).padStart(8, '0')
 const bmatch = (a: number, match: number, mask: number) => (a & mask) == match
 const signed7bit = (x: number) => x & 0b1000000 ? (x & ~(1 << 6)) - 64 : x
 
-
-
 enum flags {
   C = 0b00000001,
   Z = 0b00000010,
@@ -103,7 +101,7 @@ export class avrcpu {
   step() {
     const insn = this.flashView.getUint16(this.pc, true)
     const regs = Array(...this.registers).map(r => stoh8(r)).join(' ')
-    const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.sreg >> (8 - bit)) & 1) ? f : '.').join('')
+    const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.sreg >> (7 - bit)) & 1) ? f : '.').join('')
     console.log(`${stoh16(this.pc)}: ${stoh16(insn)} ${stob16(insn)} ${sreg} ${regs}`)
 
     let _pc = this.pc + 2
