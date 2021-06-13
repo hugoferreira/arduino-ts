@@ -107,15 +107,12 @@ export class avrcpu {
     if (!result) console.log(`Unrecognized Peripheral ${addr}`)
   }
 
-  updateFlags(result: number) {
-    // Clear V
-    this.setFlag(flags.V, 0) 
-
+  updateFlags(r: number) {
     // Set/Clear N according to MSB
-    this.setFlag(flags.N, result & (1 << 7))
+    this.setFlag(flags.N, r & (1 << 7))
 
     // Set/Clear Z if value is equal to Zero
-    this.setFlag(flags.Z, result === 0)
+    this.setFlag(flags.Z, r === 0)
 
     // S is N xor V
     this.setFlag(flags.S, this.N ^ this.V)
@@ -152,6 +149,33 @@ export class avrcpu {
       const result = this.registers[Rd] | K
       this.registers[Rd] = result
       this.updateFlags(result)
+      this.setFlag(flags.V, 0)
+
+    // ADD: Add without Carry
+    } else if (bmatch(insn, 0b0000110000000000, 0b1111110000000000)) {
+      const Rd = (insn >> 4) & 0b11111
+      const Rr = (insn >> 5) & 0b10000 | (insn & 0b1111)
+      const a = this.registers[Rd]
+      const b = this.registers[Rr]
+      const r = (a + b) & 0xFF
+      this.registers[Rd] = r
+      this.updateFlags(r)
+      this.setFlag(flags.V, 
+         (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
+        ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
+
+    // ADC: Add with Carry
+    } else if (bmatch(insn, 0b0001110000000000, 0b1111110000000000)) {
+      const Rd = (insn >> 4) & 0b11111
+      const Rr = (insn >> 5) & 0b10000 | (insn & 0b1111)
+      const a = this.registers[Rd]
+      const b = this.registers[Rr]
+      const r = (a + b + this.C ? 1 : 0) & 0xFF
+      this.registers[Rd] = r      
+      this.updateFlags(r)
+      this.setFlag(flags.V, 
+         (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
+        ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
 
     // AND: Logical AND
     } else if (bmatch(insn, 0b0010000000000000, 0b1111110000000000)) {
@@ -160,6 +184,7 @@ export class avrcpu {
       const result = this.registers[Rd] & this.registers[Rr]
       this.registers[Rd] = result
       this.updateFlags(result)
+      this.setFlag(flags.V, 0)
     
     // LPM: Load Program Memory
     } else if (bmatch(insn, 0b1001000000000100, 0b1111111000001111)) {
@@ -185,6 +210,13 @@ export class avrcpu {
       const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
       this.registers[Rd] = K
     
+    // MOVW: Copy Register Word
+    } else if (bmatch(insn, 0b0000000100000000, 0b1111111100000000)) {
+      const Rr = (insn & 0b1111) * 2
+      const Rd = ((insn >> 4) & 0b1111) * 2
+      this.registers[Rd] = this.registers[Rr]
+      this.registers[Rd + 1] = this.registers[Rr + 1]
+
     // LDS: Load Direct from Data Space
     } else if (bmatch(insn, 0b1001000000000000, 0b1111111000001111)) {
       const Rd = (insn >> 4) & 0b11111
