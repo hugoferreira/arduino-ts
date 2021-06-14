@@ -7,7 +7,8 @@ const stob16 = (u16: number) => u16.toString(2).padStart(16, '0')
 const stoh8 = (u8: number) => u8.toString(16).padStart(2, '0')
 const stob8 = (u8: number) => u8.toString(2).padStart(8, '0')
 const bmatch = (a: number, match: number, mask: number) => (a & mask) == match
-const signed7bit = (x: number) => x & 0b1000000 ? (x & ~(1 << 6)) - 64 : x
+const signed7bit  = (x: number) => x & 0b1000000 ? (x & ~(1 << 6)) - 64 : x
+const signed12bit = (x: number) => x & 0b100000000000 ? (x & ~(1 << 11)) - 2048 : x
 
 enum flags {
   C = 0b00000001,
@@ -21,6 +22,10 @@ enum flags {
 }
 
 export class avrcpu {
+  #DATASPACE_BEGIN_ADDR = 0x100
+  #DATASPACE_SIZE = 0x900
+  #PERIPHERALS_BEGIN_ADDR = 0x20
+  
   flashView: DataView
   sramView: Uint8Array
   registers: Uint8Array
@@ -59,9 +64,9 @@ export class avrcpu {
 
   constructor(private flash: Uint8Array, private dataspace = new Uint8Array(0x08FF + 0x100 + 1)) {
     this.flashView = new DataView(this.flash.buffer, 0, this.flash.length)    
-    this.sramView = new Uint8Array(this.dataspace.buffer, 0x100, this.dataspace.length - 0x100)
+    this.sramView = new Uint8Array(this.dataspace.buffer, this.#DATASPACE_BEGIN_ADDR, this.dataspace.length - 0x100)
     this.registers = new Uint8Array(this.dataspace.buffer, 0, 32)
-    this.peripherals = new Uint8Array(this.dataspace.buffer, 0x20, 224)
+    this.peripherals = new Uint8Array(this.dataspace.buffer, this.#PERIPHERALS_BEGIN_ADDR, 224)
 
     this.onIORead(address => [true, this.peripherals[address]])
     this.onIOWrite((address, value) => {
@@ -108,30 +113,46 @@ export class avrcpu {
   }
 
   updateFlags(r: number) {
-    // Set/Clear N according to MSB
-    this.setFlag(flags.N, r & (1 << 7))
-
-    // Set/Clear Z if value is equal to Zero
-    this.setFlag(flags.Z, r === 0)
-
-    // S is N xor V
-    this.setFlag(flags.S, this.N ^ this.V)
+    this.setFlag(flags.N, r & (1 << 7))     // Set/Clear N according to MSB
+    this.setFlag(flags.Z, r === 0)          // Set/Clear Z if value is equal to Zero
+    this.setFlag(flags.S, this.N ^ this.V)  // S is N xor V
   }
 
-  step() {
+  updateFlagsW(r: number) {
+    this.setFlag(flags.N, r & (1 << 15))    // Set/Clear N according to MSB
+    this.setFlag(flags.Z, r === 0)          // Set/Clear Z if value is equal to Zero
+    this.setFlag(flags.S, this.N ^ this.V)  // S is N xor V
+  }
+
+  step(debug: boolean = true) {
     const insn = this.flashView.getUint16(this.pc, true)
-    const regs = Array(...this.registers).map(r => stoh8(r)).join(' ')
-    const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.sreg >> (7 - bit)) & 1) ? f : '.').join('')
-    console.log(`${stoh16(this.pc)}: ${stoh16(insn)} ${stob16(insn)} ${sreg} ${regs}`)
+    
+    if (debug) {
+      const regs = Array(...this.registers).map(r => stoh8(r)).join(' ')
+      const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.sreg >> (7 - bit)) & 1) ? f : '.').join('')
+      console.log(`${stoh16(this.pc)}: ${stoh16(insn)} ${stob16(insn)} ${sreg} ${regs}`)
+    }
 
     let _pc = this.pc + 2
 
     // SEI: Set Global Interrupt Flag
-    if (bmatch(insn, 0b1001010001111000, 0b1111111111111111)) { 
+    if (bmatch(insn, 0b1001_0100_0111_1000, 0b1111_1111_1111_1111)) { 
       this.setFlag(flags.I, 1)
     
+    // SBI: Load an I/O Location to Register
+    } else if (bmatch(insn, 0b1001_1010_0000_0000, 0b1111_1111_0000_0000)) {
+      const A = ((insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
+      const b = insn & 0b111
+      this.pokeIO(A, this.peek(A) | (1 << b))
+
+    // CBI: Load an I/O Location to Register
+    } else if (bmatch(insn, 0b1001_1000_0000_0000, 0b1111_1111_0000_0000)) {
+      const A = ((insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
+      const b = insn & 0b111
+      this.pokeIO(A, this.peek(A) & (~(1 << b) & 0xFF))
+
     // IN: Load an I/O Location to Register
-    } else if (bmatch(insn, 0b1011000000000000, 0b1111100000000000)) {    
+    } else if (bmatch(insn, 0b1011_0000_0000_0000, 0b1111_1000_0000_0000)) {    
       const Rd = (insn >> 4) & 0b11111
       const A = ((insn >> 5) & 0b110000) | (insn & 0b1111)
       this.registers[Rd] = this.peekIO(A) 
@@ -161,8 +182,8 @@ export class avrcpu {
       this.registers[Rd] = r
       this.updateFlags(r)
       this.setFlag(flags.V, 
-         (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
-        ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
+         (a & (1 << 7)) &  (b & (1 << 7)) & ~(r & (1 << 7)) |
+        ~(a & (1 << 7)) & ~(b & (1 << 7)) &  (r & (1 << 7)))
 
     // ADC: Add with Carry
     } else if (bmatch(insn, 0b0001110000000000, 0b1111110000000000)) {
@@ -174,8 +195,8 @@ export class avrcpu {
       this.registers[Rd] = r      
       this.updateFlags(r)
       this.setFlag(flags.V, 
-         (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
-        ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
+         (a & (1 << 7)) &  (b & (1 << 7)) & ~(r & (1 << 7)) |
+        ~(a & (1 << 7)) & ~(b & (1 << 7)) &  (r & (1 << 7)))
 
     // AND: Logical AND
     } else if (bmatch(insn, 0b0010000000000000, 0b1111110000000000)) {
@@ -193,10 +214,19 @@ export class avrcpu {
       this.registers[Rd] = value
 
     // BREQ: Branch if Equal
-    } else if (bmatch(insn, 0b1111000000000001, 0b1111110000000001)) {
+    } else if (bmatch(insn, 0b1111_0000_0000_0001, 0b1111_1100_0000_0111)) {
       if (this.Z)  // sets PC if Z flag is set
-        _pc += signed7bit((insn >> 3) & 0b1111111) * 2 + 2
- 
+        _pc += signed7bit((insn >> 3) & 0b1111111) * 2
+
+    // BRNE: Branch if Not Equal
+    } else if (bmatch(insn, 0b1111_0100_0000_0001, 0b1111_1100_0000_0111)) {
+      if (!this.Z)  // sets PC if Z flag is set
+        _pc += signed7bit((insn >> 3) & 0b1111111) * 2
+
+    // RJMP: Relative Jump
+    } else if (bmatch(insn, 0b1100_0000_0000_0000, 0b1111_0000_0000_0000)) {
+      _pc += signed12bit(insn & 0b1111_1111_1111) * 2
+
     // LPM: Load Program Memory (Z+)
     } else if (bmatch(insn, 0b1001000000000101, 0b1111111000001111)) {
       const Rd = (insn >> 4) & 0b11111
@@ -216,6 +246,15 @@ export class avrcpu {
       const Rd = ((insn >> 4) & 0b1111) * 2
       this.registers[Rd] = this.registers[Rr]
       this.registers[Rd + 1] = this.registers[Rr + 1]
+
+    // SBIW: Subtract Immediate from Word
+    } else if (bmatch(insn, 0b1001_0111_0000_0000, 0b1111_1111_0000_0000)) {
+      const K = (insn >> 2) & 0b110000 | (insn & 0b1111)
+      const Rd = ((insn >> 4) & 0b11) * 2 + 24
+      const value = ((this.registers[Rd + 1] << 8 | this.registers[Rd]) - K) 
+      this.registers[Rd + 1] = (value >> 8) & 0xFF 
+      this.registers[Rd] = value & 0xFF
+      this.updateFlagsW(value)
 
     // LDS: Load Direct from Data Space
     } else if (bmatch(insn, 0b1001000000000000, 0b1111111000001111)) {
