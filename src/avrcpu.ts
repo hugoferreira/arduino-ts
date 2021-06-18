@@ -30,7 +30,7 @@ export class avrcpu {
   sramView: Uint8Array
   registers: Uint8Array
   peripherals: Uint8Array
-  
+
   pc: number = 0    // Program Counter
   
   // X, Y, Z Address Registers
@@ -61,13 +61,22 @@ export class avrcpu {
     else if (clear) this.sreg &= ~f 
   }
   
-  // Stack Pointer
+  // Stack
   get sph() { return this.peripherals[0x5E] }
   set sph(v: number) { this.peripherals[0x5E] = v }
   get spl() { return this.peripherals[0x5D] }
   set spl(v: number) { this.peripherals[0x5D] = v }
   get sp() { return this.sph << 8 | this.spl }
   set sp(v: number) { this.spl = v & 0xFF; this.sph = (v >> 8) & 0xFF }
+
+  push8(v: number) { 
+    this.sramView[this.sp--] = v & 0xFF
+  }
+
+  push16(v: number) { 
+    this.sramView[this.sp--] = v & 0xFF
+    this.sramView[this.sp--] = (v >> 8) & 0xFF
+  }
 
   // Register Names
   registerName = new Map([
@@ -186,6 +195,15 @@ export class avrcpu {
       this.updateFlags(result)
       this.setFlag(flags.V, 0)
 
+    // EOR: Exclusive OR
+    } else if (bmatch(insn, 0b0010_0100_0000_0000, 0b1111_1100_0000_0000)) {
+      const Rd = (insn >> 4) & 0b11111
+      const Rr = ((insn >> 5) & 0b10000) | (insn & 0b1111)
+      const result = this.registers[Rd] ^ this.registers[Rr]
+      this.registers[Rd] = result
+      this.updateFlags(result)
+      this.setFlag(flags.V, 0)
+
     // ADD: Add without Carry
     } else if (bmatch(insn, 0b0000110000000000, 0b1111110000000000)) {
       const Rd = (insn >> 4) & 0b11111
@@ -240,6 +258,19 @@ export class avrcpu {
     // RJMP: Relative Jump
     } else if (bmatch(insn, 0b1100_0000_0000_0000, 0b1111_0000_0000_0000)) {
       _pc += signed12bit(insn & 0b1111_1111_1111) * 2
+
+    // JMP: Unconditional Jump
+    } else if (bmatch(insn, 0b1001_0100_0000_1100, 0b1111_1110_0000_1110)) {
+      const ki = this.flashView.getUint16(_pc, true)
+      const k = (((insn >> 4) & 0b11111)) << 18 | ((insn & 0b1) << 17) | ki
+      _pc = k * 2
+
+    // JMP: Long Call to a Subroutine
+    } else if (bmatch(insn, 0b1001_0100_0000_1110, 0b1111_1110_0000_1110)) {
+      const ki = this.flashView.getUint16(_pc, true)
+      const k = (((insn >> 4) & 0b11111)) << 18 | ((insn & 0b1) << 17) | ki
+      this.push16(_pc)
+      _pc = k * 2
 
     // LPM: Load Program Memory (Z+)
     } else if (bmatch(insn, 0b1001000000000101, 0b1111111000001111)) {
