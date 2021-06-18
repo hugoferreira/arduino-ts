@@ -7,8 +7,8 @@ const stob16 = (u16: number) => u16.toString(2).padStart(16, '0')
 const stoh8 = (u8: number) => u8.toString(16).padStart(2, '0')
 const stob8 = (u8: number) => u8.toString(2).padStart(8, '0')
 const bmatch = (a: number, match: number, mask: number) => (a & mask) == match
-const signed7bit  = (x: number) => x & 0b1000000 ? (x & ~(1 << 6)) - 64 : x
-const signed12bit = (x: number) => x & 0b100000000000 ? (x & ~(1 << 11)) - 2048 : x
+const signed7bit  = (x: number) => x & (1 <<  6) ? (x & ~(1 <<  6)) -  (2**6) : x
+const signed12bit = (x: number) => x & (1 << 11) ? (x & ~(1 << 11)) - (2**11) : x
 
 enum flags {
   C = 0b00000001,
@@ -38,8 +38,14 @@ export class avrcpu {
   get y() { return this.registers[29] << 8 | this.registers[28] }
   get z() { return this.registers[31] << 8 | this.registers[30] }
 
-  // Status and Flags
-  sreg: number = 0  // ITHSVNZC
+  incz() {
+    if (this.registers[30] === 0xFF) this.registers[31] += 1
+    this.registers[30] += 1
+  }
+
+  // Status and Flags (ITHSVNZC)
+  get sreg() { return this.peripherals[0x3F] }
+  set sreg(v: number) { this.peripherals[0x3F] = v }
 
   get I() { return this.sreg & flags.I }
   get T() { return this.sreg & flags.T }
@@ -55,12 +61,21 @@ export class avrcpu {
     else if (clear) this.sreg &= ~f 
   }
   
-  incz() {
-    if (this.registers[30] === 0xFF) this.registers[31] += 1
-    this.registers[30] += 1
-  }
+  // Stack Pointer
+  get sph() { return this.peripherals[0x5E] }
+  set sph(v: number) { this.peripherals[0x5E] = v }
+  get spl() { return this.peripherals[0x5D] }
+  set spl(v: number) { this.peripherals[0x5D] = v }
+  get sp() { return this.sph << 8 | this.spl }
+  set sp(v: number) { this.spl = v & 0xFF; this.sph = (v >> 8) & 0xFF }
 
-  peripheralsName = new Map([[0x24, "DDRB"], [0x25, "PORTB"], [0x6E, "TIMSK0"]])
+  // Register Names
+  registerName = new Map([
+    [0x23, "PINB"], [0x24, "DDRB"], [0x25, "PORTB"], 
+    [0x26, "PINC"], [0x27, "DDRC"], [0x28, "PORTC"],
+    [0x29, "PIND"], [0x2A, "DDRD"], [0x2B, "PORTD"],
+    [0x3D, "SPL"],  [0x3E, "SPH"],  [0x3F, "SREG"],
+    [0x6E, "TIMSK0"]])
 
   constructor(private flash: Uint8Array, private dataspace = new Uint8Array(0x08FF + 0x100 + 1)) {
     this.flashView = new DataView(this.flash.buffer, 0, this.flash.length)    
@@ -70,7 +85,7 @@ export class avrcpu {
 
     this.onIORead(address => [true, this.peripherals[address]])
     this.onIOWrite((address, value) => {
-      console.log(`${this.peripheralsName.get(address)} set to ${stob8(value)}`)
+      console.log(`${this.registerName.get(address)} set to ${stob8(value)}`)
       this.peripherals[address] = value
       return true 
     })
@@ -83,7 +98,6 @@ export class avrcpu {
   onWrite(hook: WriteHook) { this.writeHooks.push(hook)}
 
   peek(addr: number): number {
-    console.log(`Load from peripheral ${this.peripheralsName.get(addr)}`)
     const result = this.readHooks.reduce((acc, h) => (!acc[0]) ? h(addr) : acc, [false, 0] as ReadTrap)
     return result[0] ? result[1] : this.dataspace[addr]
   }
@@ -102,7 +116,7 @@ export class avrcpu {
   peekIO(addr: number): number {
     const result = this.readIOHooks.reduce((acc, h) => (!acc[0]) ? h(addr) : acc, [false, 0] as ReadTrap)
     if (!result[0]) {
-      console.log(`Unrecognized Peripheral ${addr}`)
+      console.log(`Unrecognized IO ${addr}`)
       return 0xFF
     } else return result[1]
   }
@@ -113,13 +127,13 @@ export class avrcpu {
   }
 
   updateFlags(r: number) {
-    this.setFlag(flags.N, r & (1 << 7))     // Set/Clear N according to MSB
+    this.setFlag(flags.N, r & (1 << 7))     // Set/Clear N according to 8bit MSB
     this.setFlag(flags.Z, r === 0)          // Set/Clear Z if value is equal to Zero
     this.setFlag(flags.S, this.N ^ this.V)  // S is N xor V
   }
 
   updateFlagsW(r: number) {
-    this.setFlag(flags.N, r & (1 << 15))    // Set/Clear N according to MSB
+    this.setFlag(flags.N, r & (1 << 15))    // Set/Clear N according to 16bit MSB
     this.setFlag(flags.Z, r === 0)          // Set/Clear Z if value is equal to Zero
     this.setFlag(flags.S, this.N ^ this.V)  // S is N xor V
   }
@@ -220,7 +234,7 @@ export class avrcpu {
 
     // BRNE: Branch if Not Equal
     } else if (bmatch(insn, 0b1111_0100_0000_0001, 0b1111_1100_0000_0111)) {
-      if (!this.Z)  // sets PC if Z flag is set
+      if (!this.Z)  // sets PC if Z flag is clear
         _pc += signed7bit((insn >> 3) & 0b1111111) * 2
 
     // RJMP: Relative Jump
