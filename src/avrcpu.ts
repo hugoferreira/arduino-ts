@@ -265,7 +265,7 @@ export class avrcpu {
       const k = (((insn >> 4) & 0b11111)) << 18 | ((insn & 0b1) << 17) | ki
       _pc = k * 2
 
-    // JMP: Long Call to a Subroutine
+    // CALL: Long Call to a Subroutine
     } else if (bmatch(insn, 0b1001_0100_0000_1110, 0b1111_1110_0000_1110)) {
       const ki = this.flashView.getUint16(_pc, true)
       const k = (((insn >> 4) & 0b11111)) << 18 | ((insn & 0b1) << 17) | ki
