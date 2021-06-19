@@ -10,7 +10,6 @@
         "colors": "^1.4.0"
     },
     "devDependencies": {
-        "@types/colors": "^1.2.1",
         "@types/node": "^15.12.4",
         "npm": "^7.18.1",
         "ts-node": "^10.0.0",

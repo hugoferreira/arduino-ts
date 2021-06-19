@@ -1,4 +1,4 @@
-import { bmatch, signed12bit, signed7bit, stob16, stob8, stoh16, stoh8 } from './utils'
+import { bmatch, signed12bit, signed7bit, stob16, stob8 } from './utils'
 
 type ReadTrap = [handled: boolean, value: number]
 type ReadHook = (address: number) => ReadTrap
@@ -99,7 +99,9 @@ export class avrcpu {
   }
 
   poke(addr: number, data: number) {
-    if (this.debug && this.registerName.has(addr)) console.log(`${this.registerName.get(addr)} set to ${stob8(data)}`)
+    if (this.debug && this.registerName.has(addr)) 
+      console.log(`${this.registerName.get(addr)} set to ${stob8(data)}`)
+
     if (!this.writeHooks.some(h => h(addr, data)))
       this.dataspace[addr] = data
   }
@@ -118,178 +120,222 @@ export class avrcpu {
 
   nextInstruction() { return this.flashView.getUint16(this.pc, true) }
 
+  #insn: number = 0
+  #_pc: number = 0
+
+  opcodes = new Array<[number, number, () => void]>(
+    [0b1001_0100_0111_1000, 0b1111_1111_1111_1111, this.sei],
+    [0b1001_0000_0000_0100, 0b1111_1110_0000_1111, this.lpm],
+    [0b1001_0000_0000_0101, 0b1111_1110_0000_1111, this.lpmzi],
+    [0b1001_0000_0000_0000, 0b1111_1110_0000_1111, this.lds],
+    [0b1001_0010_0000_0000, 0b1111_1110_0000_1111, this.sts],
+    [0b1001_0100_0000_1100, 0b1111_1110_0000_1110, this.jmp],
+    [0b1001_0100_0000_1110, 0b1111_1110_0000_1110, this.call],
+    [0b1111_0000_0000_0001, 0b1111_1100_0000_0111, this.breq],
+    [0b1111_0100_0000_0001, 0b1111_1100_0000_0111, this.brne],
+    [0b1001_1010_0000_0000, 0b1111_1111_0000_0000, this.sbi],
+    [0b1001_1000_0000_0000, 0b1111_1111_0000_0000, this.cbi],
+    [0b0000_0001_0000_0000, 0b1111_1111_0000_0000, this.movw],
+    [0b1001_0111_0000_0000, 0b1111_1111_0000_0000, this.sbiw],
+    [0b0010_0100_0000_0000, 0b1111_1100_0000_0000, this.eor],
+    [0b0000_1100_0000_0000, 0b1111_1100_0000_0000, this.add],
+    [0b0001_1100_0000_0000, 0b1111_1100_0000_0000, this.adc],
+    [0b0010_0000_0000_0000, 0b1111_1100_0000_0000, this.and],
+    [0b1011_0000_0000_0000, 0b1111_1000_0000_0000, this.in],
+    [0b1011_1000_0000_0000, 0b1111_1000_0000_0000, this.out],
+    [0b0110_0000_0000_0000, 0b1111_0000_0000_0000, this.ori],
+    [0b1100_0000_0000_0000, 0b1111_0000_0000_0000, this.rjmp],
+    [0b1110_0000_0000_0000, 0b1111_0000_0000_0000, this.ldi],
+  )
+  
+  // SEI: Set Global Interrupt Flag
+  sei() {
+    this.setFlag(flags.I, 1)
+  }
+
+  // SBI: Load an I/O Location to Register
+  sbi() {
+    const A = ((this.#insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
+    const b = this.#insn & 0b111
+    this.poke(A, this.peek(A) | (1 << b))
+  }
+
+  // CBI: Load an I/O Location to Register
+  cbi() {
+    const A = ((this.#insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
+    const b = this.#insn & 0b111
+    this.poke(A, this.peek(A) & (~(1 << b) & 0xFF))
+  }
+
+  // IN: Load an I/O Location to Register
+  in() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const A = ((this.#insn >> 5) & 0b110000) | (this.#insn & 0b1111)
+    this.registers[Rd] = this.peek(A)
+  }
+
+  // OUT: Store Register to I/O Location
+  out() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const A = ((this.#insn >> 5) & 0b110000) | (this.#insn & 0b1111)
+    this.poke(A, this.registers[Rd])
+  }
+
+  // ORI: Logical OR with Immediate
+  ori() {
+    const Rd = ((this.#insn >> 4) & 0b1111) + 16
+    const K = (this.#insn >> 4) & 0b11110000 | (this.#insn & 0b1111)
+    const result = this.registers[Rd] | K
+    this.registers[Rd] = result
+    this.updateFlags(result)
+    this.setFlag(flags.V, 0)
+  }
+
+  // EOR: Exclusive OR
+  eor() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const Rr = ((this.#insn >> 5) & 0b10000) | (this.#insn & 0b1111)
+    const result = this.registers[Rd] ^ this.registers[Rr]
+    this.registers[Rd] = result
+    this.updateFlags(result)
+    this.setFlag(flags.V, 0)
+  }
+
+  // ADD: Add without Carry
+  add() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const Rr = (this.#insn >> 5) & 0b10000 | (this.#insn & 0b1111)
+    const a = this.registers[Rd]
+    const b = this.registers[Rr]
+    const r = (a + b) & 0xFF
+    this.registers[Rd] = r
+    this.updateFlags(r)
+    this.setFlag(flags.V,
+      (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
+      ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
+  }
+
+  // ADC: Add with Carry
+  adc() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const Rr = (this.#insn >> 5) & 0b10000 | (this.#insn & 0b1111)
+    const a = this.registers[Rd]
+    const b = this.registers[Rr]
+    const r = (a + b + this.C ? 1 : 0) & 0xFF
+    this.registers[Rd] = r
+    this.updateFlags(r)
+    this.setFlag(flags.V,
+      (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
+      ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
+  }
+
+  // AND: Logical AND
+  and() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const Rr = (this.#insn >> 5) & 0b10000 | (this.#insn & 0b1111)
+    const result = this.registers[Rd] & this.registers[Rr]
+    this.registers[Rd] = result
+    this.updateFlags(result)
+    this.setFlag(flags.V, 0)
+  }
+
+  // LPM: Load Program Memory
+  lpm() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const value = this.flash[this.z]
+    this.registers[Rd] = value
+  }
+
+  // LPM: Load Program Memory (Z+)
+  lpmzi() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const value = this.flash[this.z]
+    this.registers[Rd] = value
+    this.incz()
+  }
+
+  // BREQ: Branch if Equal
+  breq() {
+    if (this.Z)  // sets PC if Z flag is set
+      this.#_pc += signed7bit((this.#insn >> 3) & 0b1111111) * 2
+  }
+
+  // BRNE: Branch if Not Equal
+  brne() {
+    if (!this.Z)  // sets PC if Z flag is clear
+      this.#_pc += signed7bit((this.#insn >> 3) & 0b1111111) * 2
+  }
+
+  // RJMP: Relative Jump
+  rjmp() {
+    this.#_pc += signed12bit(this.#insn & 0b1111_1111_1111) * 2
+  }
+
+  // JMP: Unconditional Jump
+  jmp() {
+    const ki = this.flashView.getUint16(this.#_pc, true)
+    const k = (((this.#insn >> 4) & 0b11111)) << 18 | ((this.#insn & 0b1) << 17) | ki
+    this.#_pc = k * 2
+  }
+
+  // CALL: Long Call to a Subroutine
+  call() {
+    const ki = this.flashView.getUint16(this.#_pc, true)
+    const k = (((this.#insn >> 4) & 0b11111)) << 18 | ((this.#insn & 0b1) << 17) | ki
+    this.push16(this.#_pc)
+    this.#_pc = k * 2
+  }
+
+  // LDI: Load Immediate
+  ldi() {
+    const Rd = ((this.#insn >> 4) & 0b1111) + 16
+    const K = (this.#insn >> 4) & 0b11110000 | (this.#insn & 0b1111)
+    this.registers[Rd] = K
+  }
+
+  // MOVW: Copy Register Word
+  movw() {
+    const Rr = (this.#insn & 0b1111) * 2
+    const Rd = ((this.#insn >> 4) & 0b1111) * 2
+    this.registers[Rd] = this.registers[Rr]
+    this.registers[Rd + 1] = this.registers[Rr + 1]
+  }
+
+  // SBIW: Subtract Immediate from Word
+  sbiw() {
+    const K = (this.#insn >> 2) & 0b110000 | (this.#insn & 0b1111)
+    const Rd = ((this.#insn >> 4) & 0b11) * 2 + 24
+    const value = ((this.registers[Rd + 1] << 8 | this.registers[Rd]) - K)
+    this.registers[Rd + 1] = (value >> 8) & 0xFF
+    this.registers[Rd] = value & 0xFF
+    this.updateFlagsW(value)
+  }
+
+  // LDS: Load Direct from Data Space
+  lds() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const k = this.flashView.getUint16(this.#_pc, true)
+    const value = this.peek(k)
+    this.registers[Rd] = value
+    this.#_pc += 2
+  }
+
+  // STS: Store Direct to Data Space
+  sts() {
+    const Rd = (this.#insn >> 4) & 0b11111
+    const k = this.flashView.getUint16(this.#_pc, true)
+    this.poke(k, this.registers[Rd])
+    this.#_pc += 2
+  }
+
   step() {
-    const insn = this.nextInstruction()
-    
-    if (this.debug) {
-      const regs = Array(...this.registers).map(r => stoh8(r)).join(' ')
-      const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.sreg >> (7 - bit)) & 1) ? f : '.').join('')
-      console.log(`${stoh16(this.pc)}: ${stoh16(insn)} ${stob16(insn)} ${sreg} ${regs}`)
-    }
+    this.#insn = this.nextInstruction()
+    this.#_pc = this.pc + 2
 
-    let _pc = this.pc + 2
+    let _f = this.opcodes.find(op => bmatch(this.#insn, op[0], op[1]))
+    if (_f !== undefined) _f[2].call(this)
+    else if (this.debug) console.log(`Undefined Opcode: ${stob16(this.#insn)}`)
 
-    // SEI: Set Global Interrupt Flag
-    if (bmatch(insn, 0b1001_0100_0111_1000, 0b1111_1111_1111_1111)) { 
-      this.setFlag(flags.I, 1)
-    
-    // SBI: Load an I/O Location to Register
-    } else if (bmatch(insn, 0b1001_1010_0000_0000, 0b1111_1111_0000_0000)) {
-      const A = ((insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
-      const b = insn & 0b111
-      this.poke(A, this.peek(A) | (1 << b))
-
-    // CBI: Load an I/O Location to Register
-    } else if (bmatch(insn, 0b1001_1000_0000_0000, 0b1111_1111_0000_0000)) {
-      const A = ((insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
-      const b = insn & 0b111
-      this.poke(A, this.peek(A) & (~(1 << b) & 0xFF))
-
-    // IN: Load an I/O Location to Register
-    } else if (bmatch(insn, 0b1011_0000_0000_0000, 0b1111_1000_0000_0000)) {    
-      const Rd = (insn >> 4) & 0b11111
-      const A = ((insn >> 5) & 0b110000) | (insn & 0b1111)
-      this.registers[Rd] = this.peek(A) 
-           
-    // OUT: Store Register to I/O Location
-    } else if (bmatch(insn, 0b1011100000000000, 0b1111100000000000)) {    
-      const Rd = (insn >> 4) & 0b11111
-      const A = ((insn >> 5) & 0b110000) | (insn & 0b1111)
-      this.poke(A, this.registers[Rd])
-
-    // ORI: Logical OR with Immediate
-    } else if (bmatch(insn, 0b0110000000000000, 0b1111000000000000)) {
-      const Rd = ((insn >> 4) & 0b1111) + 16
-      const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
-      const result = this.registers[Rd] | K
-      this.registers[Rd] = result
-      this.updateFlags(result)
-      this.setFlag(flags.V, 0)
-
-    // EOR: Exclusive OR
-    } else if (bmatch(insn, 0b0010_0100_0000_0000, 0b1111_1100_0000_0000)) {
-      const Rd = (insn >> 4) & 0b11111
-      const Rr = ((insn >> 5) & 0b10000) | (insn & 0b1111)
-      const result = this.registers[Rd] ^ this.registers[Rr]
-      this.registers[Rd] = result
-      this.updateFlags(result)
-      this.setFlag(flags.V, 0)
-
-    // ADD: Add without Carry
-    } else if (bmatch(insn, 0b0000110000000000, 0b1111110000000000)) {
-      const Rd = (insn >> 4) & 0b11111
-      const Rr = (insn >> 5) & 0b10000 | (insn & 0b1111)
-      const a = this.registers[Rd]
-      const b = this.registers[Rr]
-      const r = (a + b) & 0xFF
-      this.registers[Rd] = r
-      this.updateFlags(r)
-      this.setFlag(flags.V, 
-         (a & (1 << 7)) &  (b & (1 << 7)) & ~(r & (1 << 7)) |
-        ~(a & (1 << 7)) & ~(b & (1 << 7)) &  (r & (1 << 7)))
-
-    // ADC: Add with Carry
-    } else if (bmatch(insn, 0b0001110000000000, 0b1111110000000000)) {
-      const Rd = (insn >> 4) & 0b11111
-      const Rr = (insn >> 5) & 0b10000 | (insn & 0b1111)
-      const a = this.registers[Rd]
-      const b = this.registers[Rr]
-      const r = (a + b + this.C ? 1 : 0) & 0xFF
-      this.registers[Rd] = r      
-      this.updateFlags(r)
-      this.setFlag(flags.V, 
-         (a & (1 << 7)) &  (b & (1 << 7)) & ~(r & (1 << 7)) |
-        ~(a & (1 << 7)) & ~(b & (1 << 7)) &  (r & (1 << 7)))
-
-    // AND: Logical AND
-    } else if (bmatch(insn, 0b0010000000000000, 0b1111110000000000)) {
-      const Rd = (insn >> 4) & 0b11111
-      const Rr = (insn >> 5) & 0b10000 | (insn & 0b1111)
-      const result = this.registers[Rd] & this.registers[Rr]
-      this.registers[Rd] = result
-      this.updateFlags(result)
-      this.setFlag(flags.V, 0)
-    
-    // LPM: Load Program Memory
-    } else if (bmatch(insn, 0b1001000000000100, 0b1111111000001111)) {
-      const Rd = (insn >> 4) & 0b11111
-      const value = this.flash[this.z]
-      this.registers[Rd] = value
-
-    // BREQ: Branch if Equal
-    } else if (bmatch(insn, 0b1111_0000_0000_0001, 0b1111_1100_0000_0111)) {
-      if (this.Z)  // sets PC if Z flag is set
-        _pc += signed7bit((insn >> 3) & 0b1111111) * 2
-
-    // BRNE: Branch if Not Equal
-    } else if (bmatch(insn, 0b1111_0100_0000_0001, 0b1111_1100_0000_0111)) {
-      if (!this.Z)  // sets PC if Z flag is clear
-        _pc += signed7bit((insn >> 3) & 0b1111111) * 2
-
-    // RJMP: Relative Jump
-    } else if (bmatch(insn, 0b1100_0000_0000_0000, 0b1111_0000_0000_0000)) {
-      _pc += signed12bit(insn & 0b1111_1111_1111) * 2
-
-    // JMP: Unconditional Jump
-    } else if (bmatch(insn, 0b1001_0100_0000_1100, 0b1111_1110_0000_1110)) {
-      const ki = this.flashView.getUint16(_pc, true)
-      const k = (((insn >> 4) & 0b11111)) << 18 | ((insn & 0b1) << 17) | ki
-      _pc = k * 2
-
-    // CALL: Long Call to a Subroutine
-    } else if (bmatch(insn, 0b1001_0100_0000_1110, 0b1111_1110_0000_1110)) {
-      const ki = this.flashView.getUint16(_pc, true)
-      const k = (((insn >> 4) & 0b11111)) << 18 | ((insn & 0b1) << 17) | ki
-      this.push16(_pc)
-      _pc = k * 2
-
-    // LPM: Load Program Memory (Z+)
-    } else if (bmatch(insn, 0b1001000000000101, 0b1111111000001111)) {
-      const Rd = (insn >> 4) & 0b11111
-      const value = this.flash[this.z]
-      this.registers[Rd] = value
-      this.incz()
-
-    // LDI: Load Immediate
-    } else if (bmatch(insn, 0b1110000000000000, 0b1111000000000000)) {
-      const Rd = ((insn >> 4) & 0b1111) + 16
-      const K = (insn >> 4) & 0b11110000 | (insn & 0b1111)
-      this.registers[Rd] = K
-    
-    // MOVW: Copy Register Word
-    } else if (bmatch(insn, 0b0000000100000000, 0b1111111100000000)) {
-      const Rr = (insn & 0b1111) * 2
-      const Rd = ((insn >> 4) & 0b1111) * 2
-      this.registers[Rd] = this.registers[Rr]
-      this.registers[Rd + 1] = this.registers[Rr + 1]
-
-    // SBIW: Subtract Immediate from Word
-    } else if (bmatch(insn, 0b1001_0111_0000_0000, 0b1111_1111_0000_0000)) {
-      const K = (insn >> 2) & 0b110000 | (insn & 0b1111)
-      const Rd = ((insn >> 4) & 0b11) * 2 + 24
-      const value = ((this.registers[Rd + 1] << 8 | this.registers[Rd]) - K) 
-      this.registers[Rd + 1] = (value >> 8) & 0xFF 
-      this.registers[Rd] = value & 0xFF
-      this.updateFlagsW(value)
-
-    // LDS: Load Direct from Data Space
-    } else if (bmatch(insn, 0b1001000000000000, 0b1111111000001111)) {
-      const Rd = (insn >> 4) & 0b11111
-      const k = this.flashView.getUint16(_pc, true)
-      const value = this.peek(k)
-      this.registers[Rd] = value
-      _pc += 2
-    
-    // STS: Store Direct to Data Space
-    } else if (bmatch(insn, 0b1001001000000000, 0b1111111000001111)) {
-      const Rd = (insn >> 4) & 0b11111
-      const k = this.flashView.getUint16(_pc, true)
-      this.poke(k, this.registers[Rd])
-      _pc += 2
-    } else {
-      if (this.debug) console.log(`Undefined Opcode: ${stob16(insn)}`)
-    }
-
-    this.pc = _pc
+    this.pc = this.#_pc
   }
 }
