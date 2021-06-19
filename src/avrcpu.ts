@@ -1,14 +1,8 @@
+import { bmatch, signed12bit, signed7bit, stob16, stob8, stoh16, stoh8 } from './utils'
+
 type ReadTrap = [handled: boolean, value: number]
 type ReadHook = (address: number) => ReadTrap
 type WriteHook = (address: number, value: number) => boolean
-
-const stoh16 = (u16: number) => u16.toString(16).padStart(4, '0')
-const stob16 = (u16: number) => u16.toString(2).padStart(16, '0')
-const stoh8 = (u8: number) => u8.toString(16).padStart(2, '0')
-const stob8 = (u8: number) => u8.toString(2).padStart(8, '0')
-const bmatch = (a: number, match: number, mask: number) => (a & mask) == match
-const signed7bit  = (x: number) => x & (1 <<  6) ? (x & ~(1 <<  6)) -  (2**6) : x
-const signed12bit = (x: number) => x & (1 << 11) ? (x & ~(1 << 11)) - (2**11) : x
 
 enum flags {
   C = 0b00000001,
@@ -31,6 +25,7 @@ export class avrcpu {
   registers: Uint8Array
   peripherals: Uint8Array
 
+  debug: boolean = false
   pc: number = 0    // Program Counter
   
   // X, Y, Z Address Registers
@@ -94,7 +89,7 @@ export class avrcpu {
 
     this.onIORead(address => [true, this.peripherals[address]])
     this.onIOWrite((address, value) => {
-      console.log(`${this.registerName.get(address)} set to ${stob8(value)}`)
+      if (this.debug) console.log(`${this.registerName.get(address)} set to ${stob8(value)}`)
       this.peripherals[address] = value
       return true 
     })
@@ -125,14 +120,14 @@ export class avrcpu {
   peekIO(addr: number): number {
     const result = this.readIOHooks.reduce((acc, h) => (!acc[0]) ? h(addr) : acc, [false, 0] as ReadTrap)
     if (!result[0]) {
-      console.log(`Unrecognized IO ${addr}`)
+      if (this.debug) console.log(`Unrecognized IO ${addr}`)
       return 0xFF
     } else return result[1]
   }
 
   pokeIO(addr: number, data: number): void {
     const result = this.writeIOHooks.some(h => h(addr, data))
-    if (!result) console.log(`Unrecognized Peripheral ${addr}`)
+    if (!result && this.debug) console.log(`Unrecognized Peripheral ${addr}`)
   }
 
   updateFlags(r: number) {
@@ -147,10 +142,12 @@ export class avrcpu {
     this.setFlag(flags.S, this.N ^ this.V)  // S is N xor V
   }
 
-  step(debug: boolean = true) {
-    const insn = this.flashView.getUint16(this.pc, true)
+  nextInstruction() { return this.flashView.getUint16(this.pc, true) }
+
+  step() {
+    const insn = this.nextInstruction()
     
-    if (debug) {
+    if (this.debug) {
       const regs = Array(...this.registers).map(r => stoh8(r)).join(' ')
       const sreg = [...'ITHSVNZC'].map((f, bit) => ((this.sreg >> (7 - bit)) & 1) ? f : '.').join('')
       console.log(`${stoh16(this.pc)}: ${stoh16(insn)} ${stob16(insn)} ${sreg} ${regs}`)
@@ -316,7 +313,7 @@ export class avrcpu {
       this.poke(k, this.registers[Rd])
       _pc += 2
     } else {
-      console.log(`Undefined Opcode: ${stob16(insn)}`)
+      if (this.debug) console.log(`Undefined Opcode: ${stob16(insn)}`)
     }
 
     this.pc = _pc
