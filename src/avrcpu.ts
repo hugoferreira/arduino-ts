@@ -17,7 +17,6 @@ enum flags {
 
 export class avrcpu {
   #DATASPACE_BEGIN_ADDR = 0x100
-  #DATASPACE_SIZE = 0x900
   #PERIPHERALS_BEGIN_ADDR = 0x20
   
   flashView: DataView
@@ -86,13 +85,6 @@ export class avrcpu {
     this.sramView = new Uint8Array(this.dataspace.buffer, this.#DATASPACE_BEGIN_ADDR, this.dataspace.length - 0x100)
     this.registers = new Uint8Array(this.dataspace.buffer, 0, 32)
     this.peripherals = new Uint8Array(this.dataspace.buffer, this.#PERIPHERALS_BEGIN_ADDR, 224)
-
-    this.onIORead(address => [true, this.peripherals[address]])
-    this.onIOWrite((address, value) => {
-      if (this.debug) console.log(`${this.registerName.get(address)} set to ${stob8(value)}`)
-      this.peripherals[address] = value
-      return true 
-    })
   }
 
   private readHooks = new Array<ReadHook>()
@@ -106,28 +98,10 @@ export class avrcpu {
     return result[0] ? result[1] : this.dataspace[addr]
   }
 
-  poke(addr: number, data: number): void {
-    if (!this.writeHooks.some(h => h(addr, data))) 
-      this.flash[addr] = data
-  }
-
-  private readIOHooks = new Array<ReadHook>()
-  private writeIOHooks = new Array<WriteHook>()
-
-  onIORead(hook: ReadHook) { this.readIOHooks.push(hook) }
-  onIOWrite(hook: WriteHook) { this.writeIOHooks.push(hook) }
-
-  peekIO(addr: number): number {
-    const result = this.readIOHooks.reduce((acc, h) => (!acc[0]) ? h(addr) : acc, [false, 0] as ReadTrap)
-    if (!result[0]) {
-      if (this.debug) console.log(`Unrecognized IO ${addr}`)
-      return 0xFF
-    } else return result[1]
-  }
-
-  pokeIO(addr: number, data: number): void {
-    const result = this.writeIOHooks.some(h => h(addr, data))
-    if (!result && this.debug) console.log(`Unrecognized Peripheral ${addr}`)
+  poke(addr: number, data: number) {
+    if (this.debug && this.registerName.has(addr)) console.log(`${this.registerName.get(addr)} set to ${stob8(data)}`)
+    if (!this.writeHooks.some(h => h(addr, data)))
+      this.dataspace[addr] = data
   }
 
   updateFlags(r: number) {
@@ -163,25 +137,25 @@ export class avrcpu {
     } else if (bmatch(insn, 0b1001_1010_0000_0000, 0b1111_1111_0000_0000)) {
       const A = ((insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
       const b = insn & 0b111
-      this.pokeIO(A, this.peek(A) | (1 << b))
+      this.poke(A, this.peek(A) | (1 << b))
 
     // CBI: Load an I/O Location to Register
     } else if (bmatch(insn, 0b1001_1000_0000_0000, 0b1111_1111_0000_0000)) {
       const A = ((insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
       const b = insn & 0b111
-      this.pokeIO(A, this.peek(A) & (~(1 << b) & 0xFF))
+      this.poke(A, this.peek(A) & (~(1 << b) & 0xFF))
 
     // IN: Load an I/O Location to Register
     } else if (bmatch(insn, 0b1011_0000_0000_0000, 0b1111_1000_0000_0000)) {    
       const Rd = (insn >> 4) & 0b11111
       const A = ((insn >> 5) & 0b110000) | (insn & 0b1111)
-      this.registers[Rd] = this.peekIO(A) 
+      this.registers[Rd] = this.peek(A) 
            
     // OUT: Store Register to I/O Location
     } else if (bmatch(insn, 0b1011100000000000, 0b1111100000000000)) {    
       const Rd = (insn >> 4) & 0b11111
       const A = ((insn >> 5) & 0b110000) | (insn & 0b1111)
-      this.pokeIO(A, this.registers[Rd])
+      this.poke(A, this.registers[Rd])
 
     // ORI: Logical OR with Immediate
     } else if (bmatch(insn, 0b0110000000000000, 0b1111000000000000)) {

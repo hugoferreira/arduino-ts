@@ -32,7 +32,7 @@ export function dumpRAM(ram: Uint8Array) {
   console.log(c.green('     00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F\n'))
   for (let i = 0; i < 16; i += 1) {
     const vals = Array<number>(...ram.subarray(i * 16, (i + 1) * 16).values())
-    const row = vals.map(b => b.toString(16).toUpperCase().padStart(2, '0'))
+    const row = vals.map(b => stoh8(b))
       .map((s, j) => ((i * 16 + j) < 32) ? c.cyan(s) : s)
       .map(s => (s === '00') ? c.dim('00') : s)
       .map((s, j) => j === 8 ? ' ' + s : s)
@@ -42,7 +42,7 @@ export function dumpRAM(ram: Uint8Array) {
       .map((s, j) => j === 8 ? ' ' + s : s)
       .join('')
 
-    console.log(`${c.green(i.toString(16).toUpperCase().padEnd(2, '0'))}   ${row} ${ascii}`)
+    console.log(`${c.green(stoh8(i))}   ${row} ${ascii}`)
   }
 }
 
@@ -51,8 +51,8 @@ export function dumpInfo(cpu: avrcpu) {
   const pc = c.green('PC') + '\t' + stoh16(cpu.pc)
   const sp = c.green('SP') + '\t' + stoh16(cpu.sp)
   const instruction = c.green('OP') + "\t" + stoh16(cpu.nextInstruction()) + '  ' + c.dim(stob16(cpu.nextInstruction()))
-  const ddrb = c.green('DDRB') + '\t' + shade0(stob8(cpu.peripherals[0x24]))
-  const portb = c.green('PORTB') + '\t' + shade0(stob8(cpu.peripherals[0x25]))
+  const ddrb = c.green('DDRB') + '\t' + shade0(stob8(cpu.peek(0x24)))
+  const portb = c.green('PORTB') + '\t' + shade0(stob8(cpu.peek(0x25)))
 
   console.log(`${pc}\t\t${instruction}`)
   console.log(`${sp}\t\t${sreg}`)
