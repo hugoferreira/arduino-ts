@@ -15,6 +15,17 @@ export const signed12bit = (x: number) => x & (1 << 11) ? (x & ~(1 << 11)) - (2 
 const highlight1 = (s: string) => [...s].map(s => s === '1' ? c.white('1') : c.grey('0') ).join('')
 const mask1 = (s: string, mask: string) => [...s].map((s, i) => mask[i] === '1' ? c.white(s) : c.grey(s)).join('')
 
+export function bitExtractor(n: number, p: string): Record<string, number> {
+  const result: Record<string, number> = {}
+
+  for (let i = 0, j = p.length - 1; j >= 0; i++, j--) {
+    const c = p[i]
+    if (c !== '.') result[c] = (result[c] ?? 0) << 1 | n >> j & 1
+  }
+
+  return result
+}
+
 export function readIntelHex(path: string, mem: Uint8Array) {
   readFileSync(path).toString().split('\n').forEach(line => {
     if (line.length > 11) {

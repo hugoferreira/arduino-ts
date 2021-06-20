@@ -1,4 +1,4 @@
-import { bmatch, signed12bit, signed7bit, stob16, stob8 } from './utils'
+import { bmatch, signed12bit, signed7bit, stob16, stob8, bitExtractor } from './utils'
 
 type ReadTrap = [handled: boolean, value: number]
 type ReadHook = (address: number) => ReadTrap
@@ -123,29 +123,29 @@ export class avrcpu {
   #insn: number = 0
   #_pc: number = 0
 
-  opcodes = new Array<[number, number, () => void]>(
-    [0b1001_0100_0111_1000, 0b1111_1111_1111_1111, this.sei],
-    [0b1001_0000_0000_0100, 0b1111_1110_0000_1111, this.lpm],
-    [0b1001_0000_0000_0101, 0b1111_1110_0000_1111, this.lpmzi],
-    [0b1001_0000_0000_0000, 0b1111_1110_0000_1111, this.lds],
-    [0b1001_0010_0000_0000, 0b1111_1110_0000_1111, this.sts],
-    [0b1001_0100_0000_1100, 0b1111_1110_0000_1110, this.jmp],
-    [0b1001_0100_0000_1110, 0b1111_1110_0000_1110, this.call],
-    [0b1111_0000_0000_0001, 0b1111_1100_0000_0111, this.breq],
-    [0b1111_0100_0000_0001, 0b1111_1100_0000_0111, this.brne],
-    [0b1001_1010_0000_0000, 0b1111_1111_0000_0000, this.sbi],
-    [0b1001_1000_0000_0000, 0b1111_1111_0000_0000, this.cbi],
-    [0b0000_0001_0000_0000, 0b1111_1111_0000_0000, this.movw],
-    [0b1001_0111_0000_0000, 0b1111_1111_0000_0000, this.sbiw],
-    [0b0010_0100_0000_0000, 0b1111_1100_0000_0000, this.eor],
-    [0b0000_1100_0000_0000, 0b1111_1100_0000_0000, this.add],
-    [0b0001_1100_0000_0000, 0b1111_1100_0000_0000, this.adc],
-    [0b0010_0000_0000_0000, 0b1111_1100_0000_0000, this.and],
-    [0b1011_0000_0000_0000, 0b1111_1000_0000_0000, this.in],
-    [0b1011_1000_0000_0000, 0b1111_1000_0000_0000, this.out],
-    [0b0110_0000_0000_0000, 0b1111_0000_0000_0000, this.ori],
-    [0b1100_0000_0000_0000, 0b1111_0000_0000_0000, this.rjmp],
-    [0b1110_0000_0000_0000, 0b1111_0000_0000_0000, this.ldi],
+  opcodes = new Array<[number, number, string, (args: any) => void]>(
+    [0b1001_0100_0111_1000, 0b1111_1111_1111_1111, '................', this.sei],
+    [0b1001_0000_0000_0100, 0b1111_1110_0000_1111, '.......ddddd....', this.lpm],
+    [0b1001_0000_0000_0101, 0b1111_1110_0000_1111, '.......ddddd....', this.lpmzi],
+    [0b1001_0000_0000_0000, 0b1111_1110_0000_1111, '.......ddddd....', this.lds],
+    [0b1001_0010_0000_0000, 0b1111_1110_0000_1111, '.......ddddd....', this.sts],
+    [0b1001_0100_0000_1100, 0b1111_1110_0000_1110, '................', this.jmp],
+    [0b1001_0100_0000_1110, 0b1111_1110_0000_1110, '................', this.call],
+    [0b1111_0000_0000_0001, 0b1111_1100_0000_0111, '......kkkkkkk...', this.breq],
+    [0b1111_0100_0000_0001, 0b1111_1100_0000_0111, '......kkkkkkk...', this.brne],
+    [0b1001_1010_0000_0000, 0b1111_1111_0000_0000, '........AAAAAbbb', this.sbi],
+    [0b1001_1000_0000_0000, 0b1111_1111_0000_0000, '........AAAAAbbb', this.cbi],
+    [0b0000_0001_0000_0000, 0b1111_1111_0000_0000, '........ddddrrrr', this.movw],
+    [0b1001_0111_0000_0000, 0b1111_1111_0000_0000, '........KKddKKKK', this.sbiw],
+    [0b0010_0100_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.eor],
+    [0b0000_1100_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.add],
+    [0b0001_1100_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.adc],
+    [0b0010_0000_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.and],
+    [0b1011_0000_0000_0000, 0b1111_1000_0000_0000, '......AArrrrAAAA', this.in],
+    [0b1011_1000_0000_0000, 0b1111_1000_0000_0000, '......AArrrrAAAA', this.out],
+    [0b0110_0000_0000_0000, 0b1111_0000_0000_0000, '....KKKKddddKKKK', this.ori],
+    [0b1100_0000_0000_0000, 0b1111_0000_0000_0000, '....kkkkkkkkkkkk', this.rjmp],
+    [0b1110_0000_0000_0000, 0b1111_0000_0000_0000, '....KKKKddddKKKK', this.ldi],
   )
   
   // SEI: Set Global Interrupt Flag
@@ -154,121 +154,100 @@ export class avrcpu {
   }
 
   // SBI: Load an I/O Location to Register
-  sbi() {
-    const A = ((this.#insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
-    const b = this.#insn & 0b111
+  sbi({ A, b }: { A: number, b: number }) {
+    A += this.#PERIPHERALS_BEGIN_ADDR
     this.poke(A, this.peek(A) | (1 << b))
   }
 
   // CBI: Load an I/O Location to Register
-  cbi() {
-    const A = ((this.#insn >> 3) & 0b11111) + this.#PERIPHERALS_BEGIN_ADDR
-    const b = this.#insn & 0b111
+  cbi({ A, b }: { A: number, b: number }) {
+    A += this.#PERIPHERALS_BEGIN_ADDR
     this.poke(A, this.peek(A) & (~(1 << b) & 0xFF))
   }
 
   // IN: Load an I/O Location to Register
-  in() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const A = ((this.#insn >> 5) & 0b110000) | (this.#insn & 0b1111)
-    this.registers[Rd] = this.peek(A)
+  in({ A, r }: { A: number, r: number }) {
+    this.registers[r] = this.peek(A)
   }
 
   // OUT: Store Register to I/O Location
-  out() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const A = ((this.#insn >> 5) & 0b110000) | (this.#insn & 0b1111)
-    this.poke(A, this.registers[Rd])
+  out({ A, r }: { A: number, r: number }) {
+    this.poke(A, this.registers[r])
   }
 
   // ORI: Logical OR with Immediate
-  ori() {
-    const Rd = ((this.#insn >> 4) & 0b1111) + 16
-    const K = (this.#insn >> 4) & 0b11110000 | (this.#insn & 0b1111)
-    const result = this.registers[Rd] | K
-    this.registers[Rd] = result
-    this.updateFlags(result)
+  ori({ K, d }: { K: number, d: number }) {
+    d += 16
+    const res = this.registers[d] | K
+    this.registers[d] = res
+    this.updateFlags(res)
     this.setFlag(flags.V, 0)
   }
 
   // EOR: Exclusive OR
-  eor() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const Rr = ((this.#insn >> 5) & 0b10000) | (this.#insn & 0b1111)
-    const result = this.registers[Rd] ^ this.registers[Rr]
-    this.registers[Rd] = result
-    this.updateFlags(result)
+  eor({ d, r }: { d: number, r: number }) {
+    const res = this.registers[d] ^ this.registers[r]
+    this.registers[d] = res
+    this.updateFlags(res)
     this.setFlag(flags.V, 0)
   }
 
   // ADD: Add without Carry
-  add() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const Rr = (this.#insn >> 5) & 0b10000 | (this.#insn & 0b1111)
-    const a = this.registers[Rd]
-    const b = this.registers[Rr]
-    const r = (a + b) & 0xFF
-    this.registers[Rd] = r
-    this.updateFlags(r)
+  add({ d, r }: { d: number, r: number }) {
+    const a = this.registers[d]
+    const b = this.registers[r]
+    const res = (a + b) & 0xFF
+    this.registers[d] = res
+    this.updateFlags(res)
     this.setFlag(flags.V,
-      (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
-      ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
+      (a & (1 << 7)) & (b & (1 << 7)) & ~(res & (1 << 7)) |
+      ~(a & (1 << 7)) & ~(b & (1 << 7)) & (res & (1 << 7)))
   }
 
   // ADC: Add with Carry
-  adc() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const Rr = (this.#insn >> 5) & 0b10000 | (this.#insn & 0b1111)
-    const a = this.registers[Rd]
-    const b = this.registers[Rr]
-    const r = (a + b + this.C ? 1 : 0) & 0xFF
-    this.registers[Rd] = r
-    this.updateFlags(r)
+  adc({ d, r }: { d: number, r: number }) {
+    const a = this.registers[d]
+    const b = this.registers[r]
+    const res = (a + b + this.C ? 1 : 0) & 0xFF
+    this.registers[d] = res
+    this.updateFlags(res)
     this.setFlag(flags.V,
-      (a & (1 << 7)) & (b & (1 << 7)) & ~(r & (1 << 7)) |
-      ~(a & (1 << 7)) & ~(b & (1 << 7)) & (r & (1 << 7)))
+      (a & (1 << 7)) & (b & (1 << 7)) & ~(res & (1 << 7)) |
+      ~(a & (1 << 7)) & ~(b & (1 << 7)) & (res & (1 << 7)))
   }
 
   // AND: Logical AND
-  and() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const Rr = (this.#insn >> 5) & 0b10000 | (this.#insn & 0b1111)
-    const result = this.registers[Rd] & this.registers[Rr]
-    this.registers[Rd] = result
-    this.updateFlags(result)
+  and({ d, r }: { d: number, r: number }) {
+    const res = this.registers[d] & this.registers[r]
+    this.registers[d] = res
+    this.updateFlags(res)
     this.setFlag(flags.V, 0)
   }
 
   // LPM: Load Program Memory
-  lpm() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const value = this.flash[this.z]
-    this.registers[Rd] = value
+  lpm({ d }: { d: number }) {
+    this.registers[d] = this.flash[this.z]
   }
 
   // LPM: Load Program Memory (Z+)
-  lpmzi() {
-    const Rd = (this.#insn >> 4) & 0b11111
-    const value = this.flash[this.z]
-    this.registers[Rd] = value
+  lpmzi({ d }: { d: number }) {
+    this.registers[d] = this.flash[this.z]
     this.incz()
   }
 
   // BREQ: Branch if Equal
-  breq() {
-    if (this.Z)  // sets PC if Z flag is set
-      this.#_pc += signed7bit((this.#insn >> 3) & 0b1111111) * 2
+  breq({ k }: { k: number }) {
+    if (this.Z) this.#_pc += signed7bit(k) * 2
   }
 
   // BRNE: Branch if Not Equal
-  brne() {
-    if (!this.Z)  // sets PC if Z flag is clear
-      this.#_pc += signed7bit((this.#insn >> 3) & 0b1111111) * 2
+  brne({ k }: { k: number }) {
+    if (!this.Z) this.#_pc += signed7bit(k) * 2
   }
 
   // RJMP: Relative Jump
-  rjmp() {
-    this.#_pc += signed12bit(this.#insn & 0b1111_1111_1111) * 2
+  rjmp({ k }: { k: number }) {
+    this.#_pc += signed12bit(k) * 2
   }
 
   // JMP: Unconditional Jump
@@ -287,44 +266,37 @@ export class avrcpu {
   }
 
   // LDI: Load Immediate
-  ldi() {
-    const Rd = ((this.#insn >> 4) & 0b1111) + 16
-    const K = (this.#insn >> 4) & 0b11110000 | (this.#insn & 0b1111)
-    this.registers[Rd] = K
+  ldi({ K, d }: { K: number, d: number }) {
+    this.registers[d + 16] = K
   }
 
   // MOVW: Copy Register Word
-  movw() {
-    const Rr = (this.#insn & 0b1111) * 2
-    const Rd = ((this.#insn >> 4) & 0b1111) * 2
-    this.registers[Rd] = this.registers[Rr]
-    this.registers[Rd + 1] = this.registers[Rr + 1]
+  movw({ d, r }: { d: number, r: number }) {
+    d <<= 1; r <<= 1
+    this.registers[d] = this.registers[r]
+    this.registers[d + 1] = this.registers[r + 1]
   }
 
   // SBIW: Subtract Immediate from Word
-  sbiw() {
-    const K = (this.#insn >> 2) & 0b110000 | (this.#insn & 0b1111)
-    const Rd = ((this.#insn >> 4) & 0b11) * 2 + 24
-    const value = ((this.registers[Rd + 1] << 8 | this.registers[Rd]) - K)
-    this.registers[Rd + 1] = (value >> 8) & 0xFF
-    this.registers[Rd] = value & 0xFF
+  sbiw({ K, d }: { K: number, d: number }) {
+    d = (d << 1) + 24
+    const value = (this.registers[d + 1] << 8 | this.registers[d]) - K
+    this.registers[d + 1] = (value >> 8) & 0xFF
+    this.registers[d] = value & 0xFF
     this.updateFlagsW(value)
   }
 
   // LDS: Load Direct from Data Space
-  lds() {
-    const Rd = (this.#insn >> 4) & 0b11111
+  lds({ d }: { d: number }) {
     const k = this.flashView.getUint16(this.#_pc, true)
-    const value = this.peek(k)
-    this.registers[Rd] = value
+    this.registers[d] = this.peek(k)
     this.#_pc += 2
   }
 
   // STS: Store Direct to Data Space
-  sts() {
-    const Rd = (this.#insn >> 4) & 0b11111
+  sts({ d }: { d: number }) {
     const k = this.flashView.getUint16(this.#_pc, true)
-    this.poke(k, this.registers[Rd])
+    this.poke(k, this.registers[d])
     this.#_pc += 2
   }
 
@@ -333,7 +305,7 @@ export class avrcpu {
     this.#_pc = this.pc + 2
 
     let _f = this.opcodes.find(op => bmatch(this.#insn, op[0], op[1]))
-    if (_f !== undefined) _f[2].call(this)
+    if (_f !== undefined) _f[3].call(this, bitExtractor(this.#insn, _f[2]))
     else if (this.debug) console.log(`Undefined Opcode: ${stob16(this.#insn)}`)
 
     this.pc = this.#_pc
