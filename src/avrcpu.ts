@@ -1,4 +1,4 @@
-import { bmatch, signed12bit, signed7bit, stob16, stob8, bitExtractor } from './utils'
+import { bmatch, signed12bit, signed7bit, stob16, stob8, bitExtractor, bitExtractMask } from './utils'
 
 type ReadTrap = [handled: boolean, value: number]
 type ReadHook = (address: number) => ReadTrap
@@ -16,6 +16,33 @@ enum flags {
 }
 
 export class avrcpu {
+  #opcodes = new Array<[string, (args: any) => void]>(
+    ['1001_0100_0111_1000', this.sei],
+    ['1001_000d_dddd_0100', this.lpm],
+    ['1001_000d_dddd_0101', this.lpmzi],
+    ['1001_000d_dddd_0000', this.lds],
+    ['1001_001d_dddd_0000', this.sts],
+    ['1001_010k_kkkk_110k', this.jmp],
+    ['1001_010k_kkkk_111k', this.call],
+    ['1111_00kk_kkkk_k001', this.breq],
+    ['1111_01kk_kkkk_k001', this.brne],
+    ['1001_1010_AAAA_Abbb', this.sbi],
+    ['1001_1000_AAAA_Abbb', this.cbi],
+    ['0000_0001_dddd_rrrr', this.movw],
+    ['1001_0111_KKdd_KKKK', this.sbiw],
+    ['0010_01rd_dddd_rrrr', this.eor],
+    ['0000_11rd_dddd_rrrr', this.add],
+    ['0001_11rd_dddd_rrrr', this.adc],
+    ['0010_00rd_dddd_rrrr', this.and],
+    ['1011_0AAd_dddd_AAAA', this.in],
+    ['1011_1AAd_dddd_AAAA', this.out],
+    ['0110_KKKK_dddd_KKKK', this.ori],
+    ['1100_kkkk_kkkk_kkkk', this.rjmp],
+    ['1110_KKKK_dddd_KKKK', this.ldi],
+  )
+
+  #lookuptable = new Array<[number, number, string, (args: any) => void]>()
+
   #DATASPACE_BEGIN_ADDR = 0x100
   #PERIPHERALS_BEGIN_ADDR = 0x20
   
@@ -85,6 +112,9 @@ export class avrcpu {
     this.sramView = new Uint8Array(this.dataspace.buffer, this.#DATASPACE_BEGIN_ADDR, this.dataspace.length - 0x100)
     this.registers = new Uint8Array(this.dataspace.buffer, 0, 32)
     this.peripherals = new Uint8Array(this.dataspace.buffer, this.#PERIPHERALS_BEGIN_ADDR, 224)
+
+    this.#lookuptable = this.#opcodes.map(([p, f]) => [...bitExtractMask(p), f])
+    if (this.debug) this.#lookuptable.forEach(([e, m, p, f]) => console.log(stob16(e), stob16(m), p, f))
   }
 
   private readHooks = new Array<ReadHook>()
@@ -123,31 +153,6 @@ export class avrcpu {
   #insn: number = 0
   #_pc: number = 0
 
-  opcodes = new Array<[number, number, string, (args: any) => void]>(
-    [0b1001_0100_0111_1000, 0b1111_1111_1111_1111, '................', this.sei],
-    [0b1001_0000_0000_0100, 0b1111_1110_0000_1111, '.......ddddd....', this.lpm],
-    [0b1001_0000_0000_0101, 0b1111_1110_0000_1111, '.......ddddd....', this.lpmzi],
-    [0b1001_0000_0000_0000, 0b1111_1110_0000_1111, '.......ddddd....', this.lds],
-    [0b1001_0010_0000_0000, 0b1111_1110_0000_1111, '.......ddddd....', this.sts],
-    [0b1001_0100_0000_1100, 0b1111_1110_0000_1110, '................', this.jmp],
-    [0b1001_0100_0000_1110, 0b1111_1110_0000_1110, '................', this.call],
-    [0b1111_0000_0000_0001, 0b1111_1100_0000_0111, '......kkkkkkk...', this.breq],
-    [0b1111_0100_0000_0001, 0b1111_1100_0000_0111, '......kkkkkkk...', this.brne],
-    [0b1001_1010_0000_0000, 0b1111_1111_0000_0000, '........AAAAAbbb', this.sbi],
-    [0b1001_1000_0000_0000, 0b1111_1111_0000_0000, '........AAAAAbbb', this.cbi],
-    [0b0000_0001_0000_0000, 0b1111_1111_0000_0000, '........ddddrrrr', this.movw],
-    [0b1001_0111_0000_0000, 0b1111_1111_0000_0000, '........KKddKKKK', this.sbiw],
-    [0b0010_0100_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.eor],
-    [0b0000_1100_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.add],
-    [0b0001_1100_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.adc],
-    [0b0010_0000_0000_0000, 0b1111_1100_0000_0000, '......rdddddrrrr', this.and],
-    [0b1011_0000_0000_0000, 0b1111_1000_0000_0000, '......AArrrrAAAA', this.in],
-    [0b1011_1000_0000_0000, 0b1111_1000_0000_0000, '......AArrrrAAAA', this.out],
-    [0b0110_0000_0000_0000, 0b1111_0000_0000_0000, '....KKKKddddKKKK', this.ori],
-    [0b1100_0000_0000_0000, 0b1111_0000_0000_0000, '....kkkkkkkkkkkk', this.rjmp],
-    [0b1110_0000_0000_0000, 0b1111_0000_0000_0000, '....KKKKddddKKKK', this.ldi],
-  )
-  
   // SEI: Set Global Interrupt Flag
   sei() {
     this.setFlag(flags.I, 1)
@@ -166,13 +171,13 @@ export class avrcpu {
   }
 
   // IN: Load an I/O Location to Register
-  in({ A, r }: { A: number, r: number }) {
-    this.registers[r] = this.peek(A)
+  in({ A, d }: { A: number, d: number }) {
+    this.registers[d] = this.peek(A)
   }
 
   // OUT: Store Register to I/O Location
-  out({ A, r }: { A: number, r: number }) {
-    this.poke(A, this.registers[r])
+  out({ A, d }: { A: number, d: number }) {
+    this.poke(A, this.registers[d])
   }
 
   // ORI: Logical OR with Immediate
@@ -304,7 +309,8 @@ export class avrcpu {
     this.#insn = this.nextInstruction()
     this.#_pc = this.pc + 2
 
-    let _f = this.opcodes.find(op => bmatch(this.#insn, op[0], op[1]))
+    // A quick boost would be to pre-generate the 2**16 = 65536 possible opcodes
+    let _f = this.#lookuptable.find(op => bmatch(this.#insn, op[0], op[1]))
     if (_f !== undefined) _f[3].call(this, bitExtractor(this.#insn, _f[2]))
     else if (this.debug) console.log(`Undefined Opcode: ${stob16(this.#insn)}`)
 

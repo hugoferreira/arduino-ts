@@ -15,6 +15,21 @@ export const signed12bit = (x: number) => x & (1 << 11) ? (x & ~(1 << 11)) - (2 
 const highlight1 = (s: string) => [...s].map(s => s === '1' ? c.white('1') : c.grey('0') ).join('')
 const mask1 = (s: string, mask: string) => [...s].map((s, i) => mask[i] === '1' ? c.white(s) : c.grey(s)).join('')
 
+export function bitExtractMask(p: string): [number, number, string] {
+  let eq = 0
+  let mask = 0
+  let pattern = ''
+
+  for (const c of p) {
+    if (c === '_') continue
+    eq = (eq << 1) | ((c === '1') ? 1 : 0)
+    mask = (mask << 1) | (((c === '1') || (c === '0')) ? 1 : 0)
+    pattern += (((c === '1') || (c === '0')) ? '.' : c)
+  }
+
+  return [eq, mask, pattern]
+}
+
 export function bitExtractor(n: number, p: string): Record<string, number> {
   const result: Record<string, number> = {}
 
